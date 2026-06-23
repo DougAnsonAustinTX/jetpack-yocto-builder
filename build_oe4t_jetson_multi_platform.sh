@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# build_oe4t_jetson_multi_v13.sh
+# build_oe4t_jetson_multi_platform_v14.sh
 #
 # OE4T / Yocto build setup for:
 #   1. Jetson Orin Nano Super Developer Kit
@@ -18,64 +18,51 @@ set -Eeuo pipefail
 #   thor
 #
 # Build one platform:
-#   ./build_oe4t_jetson_multi_v13.sh
-#   TARGET_PLATFORM=orin-nx ./build_oe4t_jetson_multi_v13.sh
-#   TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_v13.sh
+#   ./build_oe4t_jetson_multi_platform_v14.sh
+#   TARGET_PLATFORM=orin-nx ./build_oe4t_jetson_multi_platform_v14.sh
+#   TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_platform_v14.sh
 #
 # Build all three platforms:
-#   BUILD_ALL_PLATFORMS=1 ./build_oe4t_jetson_multi_v13.sh
+#   BUILD_ALL_PLATFORMS=1 ./build_oe4t_jetson_multi_platform_v14.sh
 #
 # Smaller image:
-#   TARGET_IMAGE=demo-image-base ./build_oe4t_jetson_multi_v13.sh
+#   TARGET_IMAGE=demo-image-base ./build_oe4t_jetson_multi_platform_v14.sh
 #
 # Clean one platform build directory:
-#   CLEAN_BUILD=1 ./build_oe4t_jetson_multi_v13.sh
+#   CLEAN_BUILD=1 ./build_oe4t_jetson_multi_platform_v14.sh
 #
 # Production-ish build without permissive dev login:
-#   DEV_LOGIN_FEATURES=0 ./build_oe4t_jetson_multi_v13.sh
+#   DEV_LOGIN_FEATURES=0 ./build_oe4t_jetson_multi_platform_v14.sh
 #
 # Important:
 #   This script intentionally does NOT force IMAGE_FSTYPES.
 #   Current OE4T/meta-tegra handles Jetson tegraflash output generation itself.
 #
-# v13 fixes:
-#   - Extends the generated local compatibility layer with a
-#     tegra-libraries-multimedia bbappend. Current OE4T/meta-tegra builds can
-#     fail package QA because opaque NVIDIA multimedia binaries contain strings
-#     that look like the build host HOME/TMPDIR. Keep the workaround scoped to
-#     that vendor binary recipe instead of disabling buildpaths QA globally.
+# v14 fixes:
+#   - Fixes buildpaths QA failures for tegra-libraries-camera and future
+#     tegra-libraries-* split packages by adding one recipe-family scoped
+#     bbappend in the generated local fix layer.
+#   - Keeps the workaround scoped to opaque NVIDIA BSP binary library recipes
+#     instead of disabling buildpaths QA globally for the whole image.
+#   - Applies buildpaths skip to every split package emitted by matching
+#     tegra-libraries-* recipes, so follow-on packages from the same BSP binary
+#     family do not fail one at a time.
 #
-# v12 fixes:
-#   - Fixes the local compatibility layer's Yocto series declaration for OE4T
-#     branches whose core layer currently reports blacksail/wrynose. v11 used
-#     a static newer-series list, so bitbake-layers rejected the generated
-#     meta-jetson-builder-fixes layer before parsing could continue.
+# v13 fixes retained:
+#   - Added tegra-libraries-multimedia workaround for buildpaths QA in opaque
+#     NVIDIA multimedia binaries.
+#
+# v12 fixes retained:
 #   - Dynamically reads LAYERSERIES_COMPAT_core from the checked-out OE4T core
-#     layer and emits a matching compatibility list for the generated local
-#     fix layer.
+#     layer and emits a matching compatibility list for the generated fix layer.
 #
 # v11 fixes retained:
-#   - Adds a small local Yocto layer with a linux-firmware bbappend to keep
-#     Ubuntu 24.04 / current OE4T builds from failing on buildpaths QA in
-#     third-party binary firmware blobs that are not part of the Jetson path.
-#   - Keeps the fix recipe-scoped to linux-firmware instead of disabling
-#     buildpaths QA globally.
+#   - Adds a local linux-firmware bbappend for buildpaths QA in third-party
+#     binary firmware blobs that are not part of the Jetson boot path.
 #
 # v10 fixes retained:
-#   - Adds Ubuntu 24.04 AppArmor/user-namespace preflight and automatic fix
-#     for BitBake's user namespace sanity check.
+#   - Adds Ubuntu 24.04 AppArmor/user-namespace preflight and automatic fix.
 #   - Persists the user namespace compatibility sysctls by default.
-#   - Makes the meta-openembedded layer hint check understand sublayers.
-#
-# v9 fixes retained:
-#   - Wraps the primary image build command with "time".
-#   - Prints clean elapsed build time per platform.
-#
-# v8 fixes retained:
-#   - Handles both *.tegraflash.tar.zst and *.tegraflash-tar.zst outputs.
-#   - Adds perl-native single-thread workaround.
-#   - Keeps rpcsvc-proto-native and openssl-native single-thread workarounds.
-#   - Makes clock synchronization check stricter before BitBake starts.
 ###############################################################################
 
 SCRIPT_NAME="$(basename "$0")"
@@ -89,21 +76,15 @@ TARGET_DISTRO="${TARGET_DISTRO:-tegrademo}"
 
 BUILD_ALL_PLATFORMS="${BUILD_ALL_PLATFORMS:-0}"
 CLEAN_BUILD="${CLEAN_BUILD:-0}"
-
 DEV_LOGIN_FEATURES="${DEV_LOGIN_FEATURES:-1}"
 
 HOST_CPUS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 BB_THREADS="${BB_THREADS:-$HOST_CPUS}"
 MAKE_THREADS="${MAKE_THREADS:--j$HOST_CPUS}"
-
 MIN_FREE_GB="${MIN_FREE_GB:-150}"
 
-# Ubuntu 24.04 enables AppArmor restrictions on unprivileged user namespaces.
-# BitBake needs user namespaces for its sanity checks and some isolation paths.
-# Keep this enabled by default so Noble hosts work out of the box.
 AUTO_FIX_UBUNTU_USERNS="${AUTO_FIX_UBUNTU_USERNS:-1}"
 PERSIST_UBUNTU_USERNS_FIX="${PERSIST_UBUNTU_USERNS_FIX:-1}"
-
 
 # Optional exact workspace override for single-platform builds.
 # If unset, each platform gets a workspace beside this script.
@@ -140,8 +121,6 @@ platform_machine() {
             echo "p3768-0000-p3767-0003"
             ;;
         orin-nx)
-            # Common OE4T machine for Jetson Orin NX module on Xavier NX / P3509 carrier.
-            # Override with TARGET_MACHINE if your carrier/module combination differs.
             echo "p3509-a02-p3767-0000"
             ;;
         thor)
@@ -192,7 +171,7 @@ platform_workspace() {
 }
 
 print_platform_help() {
-    cat <<EOF
+    cat <<EOF_HELP
 
 Supported platforms:
 
@@ -220,15 +199,15 @@ Supported platforms:
 
 Examples:
 
-  ./build_oe4t_jetson_multi_v13.sh
+  ./build_oe4t_jetson_multi_platform_v14.sh
 
-  TARGET_PLATFORM=orin-nx ./build_oe4t_jetson_multi_v13.sh
+  TARGET_PLATFORM=orin-nx ./build_oe4t_jetson_multi_platform_v14.sh
 
-  TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_v13.sh
+  TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_platform_v14.sh
 
-  BUILD_ALL_PLATFORMS=1 ./build_oe4t_jetson_multi_v13.sh
+  BUILD_ALL_PLATFORMS=1 ./build_oe4t_jetson_multi_platform_v14.sh
 
-EOF
+EOF_HELP
 }
 
 append_once_block() {
@@ -240,38 +219,31 @@ append_once_block() {
     local hashserve_db_dir="$6"
 
     # Remove generated blocks from previous script versions.
-    sed -i '/^# BEGIN generated by build_oe4t_orin_nano_super_v2.sh$/,/^# END generated by build_oe4t_orin_nano_super_v2.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_orin_nano_super_v3.sh$/,/^# END generated by build_oe4t_orin_nano_super_v3.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_orin_nano_super_v4.sh$/,/^# END generated by build_oe4t_orin_nano_super_v4.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_orin_nano_super_v5.sh$/,/^# END generated by build_oe4t_orin_nano_super_v5.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_orin_nano_super_v5.sh dev login$/,/^# END generated by build_oe4t_orin_nano_super_v5.sh dev login$/d' "$file"
-
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v6.sh$/,/^# END generated by build_oe4t_jetson_multi_v6.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v6.sh dev login$/,/^# END generated by build_oe4t_jetson_multi_v6.sh dev login$/d' "$file"
-
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v7.sh$/,/^# END generated by build_oe4t_jetson_multi_v7.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v7.sh dev login$/,/^# END generated by build_oe4t_jetson_multi_v7.sh dev login$/d' "$file"
-
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v8.sh$/,/^# END generated by build_oe4t_jetson_multi_v8.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v8.sh dev login$/,/^# END generated by build_oe4t_jetson_multi_v8.sh dev login$/d' "$file"
-
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v9.sh$/,/^# END generated by build_oe4t_jetson_multi_v9.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v9.sh dev login$/,/^# END generated by build_oe4t_jetson_multi_v9.sh dev login$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v10.sh$/,/^# END generated by build_oe4t_jetson_multi_v10.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v10.sh dev login$/,/^# END generated by build_oe4t_jetson_multi_v10.sh dev login$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v11.sh$/,/^# END generated by build_oe4t_jetson_multi_v11.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v11.sh dev login$/,/^# END generated by build_oe4t_jetson_multi_v11.sh dev login$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v12.sh$/,/^# END generated by build_oe4t_jetson_multi_v12.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v12.sh dev login$/,/^# END generated by build_oe4t_jetson_multi_v12.sh dev login$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v13.sh$/,/^# END generated by build_oe4t_jetson_multi_v13.sh$/d' "$file"
-    sed -i '/^# BEGIN generated by build_oe4t_jetson_multi_v13.sh dev login$/,/^# END generated by build_oe4t_jetson_multi_v13.sh dev login$/d' "$file"
+    for old in \
+        build_oe4t_orin_nano_super_v2.sh \
+        build_oe4t_orin_nano_super_v3.sh \
+        build_oe4t_orin_nano_super_v4.sh \
+        build_oe4t_orin_nano_super_v5.sh \
+        build_oe4t_jetson_multi_v6.sh \
+        build_oe4t_jetson_multi_v7.sh \
+        build_oe4t_jetson_multi_v8.sh \
+        build_oe4t_jetson_multi_v9.sh \
+        build_oe4t_jetson_multi_v10.sh \
+        build_oe4t_jetson_multi_v11.sh \
+        build_oe4t_jetson_multi_v12.sh \
+        build_oe4t_jetson_multi_v13.sh \
+        build_oe4t_jetson_multi_v14.sh
+    do
+        sed -i "/^# BEGIN generated by ${old//\//\/}\$/,/^# END generated by ${old//\//\/}\$/d" "$file"
+        sed -i "/^# BEGIN generated by ${old//\//\/} dev login\$/,/^# END generated by ${old//\//\/} dev login\$/d" "$file"
+    done
 
     # Remove stray old debug-tweaks lines from previous manual/script attempts.
     sed -i '/debug-tweaks/d' "$file"
 
-    cat >> "$file" <<EOF
+    cat >> "$file" <<EOF_CONF
 
-# BEGIN generated by build_oe4t_jetson_multi_v13.sh
+# BEGIN generated by build_oe4t_jetson_multi_v14.sh
 
 # Platform selected by script.
 # Platform: $platform
@@ -312,31 +284,31 @@ IMAGE_INSTALL:append = " openssh-sftp-server"
 # Forcing tegraflash.tar.zst can trigger:
 #   No CONVERSION_CMD defined for subtype "tar"
 
-# END generated by build_oe4t_jetson_multi_v13.sh
-EOF
+# END generated by build_oe4t_jetson_multi_v14.sh
+EOF_CONF
 
     if [ "$DEV_LOGIN_FEATURES" = "1" ]; then
-        cat >> "$file" <<EOF
+        cat >> "$file" <<EOF_DEV
 
-# BEGIN generated by build_oe4t_jetson_multi_v13.sh dev login
+# BEGIN generated by build_oe4t_jetson_multi_v14.sh dev login
 
 # Development convenience.
 # These replace the older "debug-tweaks" feature, which is not valid in this tree.
 # Remove or set DEV_LOGIN_FEATURES=0 for production images.
 EXTRA_IMAGE_FEATURES:append = " ssh-server-openssh allow-empty-password empty-root-password allow-root-login"
 
-# END generated by build_oe4t_jetson_multi_v13.sh dev login
-EOF
+# END generated by build_oe4t_jetson_multi_v14.sh dev login
+EOF_DEV
     else
-        cat >> "$file" <<EOF
+        cat >> "$file" <<EOF_DEV
 
-# BEGIN generated by build_oe4t_jetson_multi_v13.sh dev login
+# BEGIN generated by build_oe4t_jetson_multi_v14.sh dev login
 
 # Development login features disabled by DEV_LOGIN_FEATURES=0.
 EXTRA_IMAGE_FEATURES:append = " ssh-server-openssh"
 
-# END generated by build_oe4t_jetson_multi_v13.sh dev login
-EOF
+# END generated by build_oe4t_jetson_multi_v14.sh dev login
+EOF_DEV
     fi
 }
 
@@ -350,7 +322,7 @@ print_next_steps() {
     local latest_tegraflash="$7"
     local elapsed_hms="$8"
 
-    cat <<EOF
+    cat <<EOF_NEXT
 
 ===============================================================================
 BUILD COMPLETE: $platform
@@ -470,7 +442,7 @@ For internal/default flashing, if supported by the generated package:
   - This is a development image if DEV_LOGIN_FEATURES=1.
 
 ===============================================================================
-EOF
+EOF_NEXT
 }
 
 install_host_prereqs() {
@@ -498,7 +470,6 @@ install_host_prereqs() {
 check_clock_sync() {
     if command -v timedatectl >/dev/null 2>&1; then
         log "Checking host clock synchronization"
-
         sudo timedatectl set-ntp true || true
 
         if ! timedatectl | grep -q "System clock synchronized: yes"; then
@@ -511,8 +482,6 @@ check_clock_sync() {
 }
 
 userns_selftest() {
-    # BitBake's sanity check needs unprivileged user namespaces.  This is the
-    # smallest direct host-side probe for the same kernel/AppArmor capability.
     unshare -Ur true >/dev/null 2>&1
 }
 
@@ -544,7 +513,7 @@ ensure_bitbake_userns_usable() {
     warn "User namespace self-test failed before applying host compatibility fixes."
 
     if [ "$AUTO_FIX_UBUNTU_USERNS" != "1" ]; then
-        cat <<EOF >&2
+        cat <<EOF_USERNS >&2
 
 BitBake cannot use unprivileged user namespaces on this host.
 On Ubuntu 24.04 this is commonly caused by AppArmor's unprivileged user
@@ -559,7 +528,7 @@ or rerun this script with:
 
   AUTO_FIX_UBUNTU_USERNS=1 $0
 
-EOF
+EOF_USERNS
         die "BitBake user namespace support is unavailable."
     fi
 
@@ -596,7 +565,7 @@ EOF
         return
     fi
 
-    cat <<EOF >&2
+    cat <<EOF_USERNS_DIAG >&2
 
 BitBake user namespaces are still unavailable after applying the known Ubuntu
 24.04 compatibility settings.
@@ -610,10 +579,9 @@ Diagnostics:
 Try manually checking AppArmor policy, container/VM restrictions, and whether the
 host permits unprivileged user namespaces at all.
 
-EOF
+EOF_USERNS_DIAG
     die "BitBake user namespace support is unavailable."
 }
-
 
 ensure_builder_fix_layer() {
     local distro_dir="$1"
@@ -635,9 +603,6 @@ ensure_builder_fix_layer() {
         log "Detected Yocto core layer compatibility series: $compat_series"
     fi
 
-    # Include common OE4T/current-series aliases as a harmless fallback. The key
-    # requirement is that the generated layer includes the exact series exposed
-    # by the checked-out core layer, such as blacksail/wrynose on current OE4T.
     local fallback_series
     for fallback_series in blacksail wrynose scarthgap styhead walnascar whinlatter master; do
         case " $compat_series " in
@@ -648,10 +613,13 @@ ensure_builder_fix_layer() {
 
     log "Creating/updating local Yocto compatibility fix layer"
 
-    mkdir -p "$fix_layer/conf" "$fix_layer/recipes-kernel/linux-firmware" "$fix_layer/recipes-bsp/tegra-binaries"
+    mkdir -p \
+        "$fix_layer/conf" \
+        "$fix_layer/recipes-kernel/linux-firmware" \
+        "$fix_layer/recipes-bsp/tegra-binaries"
 
-    cat > "$fix_layer/conf/layer.conf" <<EOF
-# Local fixes generated by build_oe4t_jetson_multi_platform_v13.sh.
+    cat > "$fix_layer/conf/layer.conf" <<EOF_LAYER
+# Local fixes generated by build_oe4t_jetson_multi_platform_v14.sh.
 # This layer is intentionally small and recipe-scoped.
 BBPATH .= ":\${LAYERDIR}"
 BBFILES += "\${LAYERDIR}/recipes-*/*/*.bbappend"
@@ -660,9 +628,9 @@ BBFILE_PATTERN_jetson-builder-fixes = "^\${LAYERDIR}/"
 BBFILE_PRIORITY_jetson-builder-fixes = "99"
 LAYERDEPENDS_jetson-builder-fixes = "core"
 LAYERSERIES_COMPAT_jetson-builder-fixes = "$compat_series"
-EOF
+EOF_LAYER
 
-    cat > "$fix_layer/recipes-kernel/linux-firmware/linux-firmware_%.bbappend" <<'EOF'
+    cat > "$fix_layer/recipes-kernel/linux-firmware/linux-firmware_%.bbappend" <<'EOF_LINUX_FW'
 # linux-firmware ships opaque vendor binary firmware blobs. Current upstream
 # linux-firmware includes qcom/qcs6490/radxa/dragon-q6a *.mbn blobs whose
 # payload strings can match the build host HOME/TMPDIR and trip Yocto's
@@ -678,21 +646,37 @@ WARN_QA:append = " buildpaths"
 # exact package names come from linux-firmware's qcom packaging split.
 INSANE_SKIP:${PN}-qcom-qcs6490-radxa-dragon-q6a-audio += "buildpaths"
 INSANE_SKIP:${PN}-qcom-qcs6490-radxa-dragon-q6a-compute += "buildpaths"
-EOF
+EOF_LINUX_FW
 
-    cat > "$fix_layer/recipes-bsp/tegra-binaries/tegra-libraries-multimedia_%.bbappend" <<'EOF'
-# tegra-libraries-multimedia packages opaque NVIDIA multimedia binaries. On
-# current OE4T/meta-tegra builds, libnvtvmr.so can contain strings that match
-# the build host HOME/TMPDIR and trip Yocto's buildpaths QA check. This binary
-# is provided by the NVIDIA BSP payload rather than compiled from local source,
-# so the practical compatibility fix is to relax buildpaths QA only for this
-# recipe/package.
+    cat > "$fix_layer/recipes-bsp/tegra-binaries/tegra-libraries-%_%.bbappend" <<'EOF_TEGRA_LIBS'
+# tegra-libraries-* recipes package opaque NVIDIA BSP binary libraries.
+# These prebuilt vendor binaries can contain embedded strings that look like
+# the build host HOME/TMPDIR and trip Yocto's buildpaths QA check. The binaries
+# are provided by the NVIDIA BSP payload rather than compiled from local source,
+# so the practical compatibility fix is to relax buildpaths QA for this recipe
+# family only.
 #
-# Keep this recipe-scoped; do not disable buildpaths QA globally for the image.
+# This intentionally covers tegra-libraries-camera, tegra-libraries-multimedia,
+# and any other tegra-libraries-* split packages that are pulled into the image.
+# Do not disable buildpaths QA globally for the whole image.
 ERROR_QA:remove = "buildpaths"
 WARN_QA:append = " buildpaths"
 INSANE_SKIP:${PN} += "buildpaths"
-EOF
+
+python __anonymous () {
+    # Apply the skip to every split package emitted by the matching recipe.
+    # PACKAGES is known at parse time for these recipes, and this prevents the
+    # build from failing one package at a time as BitBake reaches each split.
+    packages = (d.getVar('PACKAGES') or '').split()
+    for pkg in packages:
+        d.appendVar('INSANE_SKIP:%s' % pkg, ' buildpaths')
+}
+EOF_TEGRA_LIBS
+
+    # Remove the old v13 single-recipe bbappend if it exists so there is only
+    # one authoritative tegra-libraries buildpaths workaround.
+    rm -f "$fix_layer/recipes-bsp/tegra-binaries/tegra-libraries-multimedia_%.bbappend"
+    rm -f "$fix_layer/recipes-bsp/tegra-binaries/tegra-libraries-camera_%.bbappend"
 
     if grep -qF "$fix_layer" "$bblayers_conf"; then
         log "Local compatibility fix layer already present in bblayers.conf"
@@ -839,7 +823,7 @@ build_one_platform() {
     fi
 
     log "Build configuration for $platform"
-    cat <<EOF
+    cat <<EOF_BUILD_CONFIG
   SCRIPT_NAME:         $SCRIPT_NAME
   SCRIPT_DIR:          $SCRIPT_DIR
   TARGET_PLATFORM:     $platform
@@ -858,7 +842,7 @@ build_one_platform() {
   DEV_LOGIN_FEATURES:  $DEV_LOGIN_FEATURES
   AUTO_FIX_USERNS:     $AUTO_FIX_UBUNTU_USERNS
   PERSIST_USERNS_FIX:  $PERSIST_UBUNTU_USERNS_FIX
-EOF
+EOF_BUILD_CONFIG
 
     ensure_bitbake_userns_usable
 
@@ -868,9 +852,7 @@ EOF
     log "Starting image build for $platform: bitbake $TARGET_IMAGE"
 
     build_start_epoch="$(date +%s)"
-
     time bitbake "$TARGET_IMAGE"
-
     build_end_epoch="$(date +%s)"
     build_elapsed_seconds="$((build_end_epoch - build_start_epoch))"
     build_elapsed_hms="$(format_seconds_hms "$build_elapsed_seconds")"
@@ -879,11 +861,9 @@ EOF
 
     local deploy_dir
     deploy_dir="$build_abs_dir/tmp/deploy/images/$machine"
-
     [ -d "$deploy_dir" ] || die "Expected deploy directory not found: $deploy_dir"
 
     local latest_tegraflash
-
     latest_tegraflash="$(
         find "$deploy_dir" -maxdepth 1 -type f \
             \( -name "${TARGET_IMAGE}-${machine}.rootfs*.tegraflash.tar.zst" -o -name "${TARGET_IMAGE}-${machine}.rootfs*.tegraflash-tar.zst" \) \
