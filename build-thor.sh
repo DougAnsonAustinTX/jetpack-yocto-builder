@@ -2,6 +2,6 @@
 
 set -x
 
-rm -rf *super
+rm -rf oe4t*
 chmod 755 *.sh 
 TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_platform.sh
