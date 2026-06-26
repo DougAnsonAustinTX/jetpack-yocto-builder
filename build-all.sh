@@ -2,6 +2,7 @@
 
 set -x
 
-rm -rf oe4t*
-chmod 755 *.sh 
-TARGET_PLATFORM=1 ./build_oe4t_jetson_multi_platform.sh
+chmod 755 *.sh
+./build-orin-super-nano.sh
+./build-thor.sh
+./build-orinnx.sh
