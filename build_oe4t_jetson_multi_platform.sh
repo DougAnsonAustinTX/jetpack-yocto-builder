@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# build_oe4t_jetson_multi_platform_v60.sh
+# build_oe4t_jetson_multi_platform_v62.sh
 #
 # OE4T / Yocto build setup for:
 #   1. Jetson Orin Nano Super Developer Kit
@@ -18,45 +18,53 @@ set -Eeuo pipefail
 #   thor
 #
 # Build one platform:
-#   ./build_oe4t_jetson_multi_platform_v60.sh
-#   TARGET_PLATFORM=orin-nx ./build_oe4t_jetson_multi_platform_v60.sh
-#   TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_platform_v60.sh
+#   ./build_oe4t_jetson_multi_platform_v62.sh
+#   TARGET_PLATFORM=orin-nx ./build_oe4t_jetson_multi_platform_v62.sh
+#   TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_platform_v62.sh
 #
 # Build all three platforms:
-#   BUILD_ALL_PLATFORMS=1 ./build_oe4t_jetson_multi_platform_v60.sh
+#   BUILD_ALL_PLATFORMS=1 ./build_oe4t_jetson_multi_platform_v62.sh
 #
 # Smaller image:
-#   TARGET_IMAGE=demo-image-base ./build_oe4t_jetson_multi_platform_v60.sh
+#   TARGET_IMAGE=demo-image-base ./build_oe4t_jetson_multi_platform_v62.sh
 #
 # Clean one platform build directory:
-#   CLEAN_BUILD=1 ./build_oe4t_jetson_multi_platform_v60.sh
+#   CLEAN_BUILD=1 ./build_oe4t_jetson_multi_platform_v62.sh
 #
 # Production-ish build without permissive dev login:
-#   DEV_LOGIN_FEATURES=0 ./build_oe4t_jetson_multi_platform_v60.sh
+#   DEV_LOGIN_FEATURES=0 ./build_oe4t_jetson_multi_platform_v62.sh
 #
 # Bundle primary tegraflash artifact after a successful build:
-#   ./build_oe4t_jetson_multi_platform_v60.sh --bundle
+#   ./build_oe4t_jetson_multi_platform_v62.sh --bundle
 #
 # Important:
 #   This script intentionally does NOT force IMAGE_FSTYPES.
 #   Current OE4T/meta-tegra handles Jetson tegraflash output generation itself.
 #
-# v60 notes:
-#   - Fixes the repeated compiler-rt/compiler-rt-native do_configure failure
-#     seen on both arm64 and x64 Thor builds:
+# v62 notes:
+#   - Generalizes the Thor LLVM missing-runtimes guard beyond the observed
+#     compiler-rt/libcxx failures. v62 covers libcxxabi/libcxxabi-native and
+#     libunwind/libunwind-native when those recipes are active, and validates
+#     any active LLVM runtime component guard before building.
+#   - Removes local PR:append mutations from generated compatibility bbappends.
+#     For recipes that use shared or externally redirected source trees, a local
+#     PR suffix can make BitBake/CMake derive a PR-suffixed source path that the
+#     actual source provider did not create. Task signature changes and targeted
+#     cleansstate guards are used instead of PR suffixes.
+#
+# v61 notes:
+#   - Fixes the repeated libcxx-native do_configure failure seen on Thor:
 #       CMake Error: The source directory
 #       .../llvm-project-source-21.1.8-r1.jetsonbuilder52/.../runtimes
 #       does not exist.
-#   - Root cause: the local compiler-rt bbappend used PR:append=.jetsonbuilder52.
-#     Yocto includes PR in WORKDIR/STAMP-style paths, while the shared LLVM
-#     source provider still unpacked llvm-project-source at the upstream r1
-#     work-shared path. The v57 guard correctly found the real r1 source tree
-#     but did not materialize the PR-suffixed OECMAKE_SOURCEPATH that CMake was
-#     already going to use.
-#   - v60 removes PR mutation from the compiler-rt bbappend and hardens the
-#     configure guard to repair both the real LLVM source root and the exact
-#     CMake source path, including creating a symlink from the requested
-#     runtimes path to the repaired real runtimes entry point when needed.
+#   - Root cause: v60 repaired this missing PR-suffixed LLVM runtimes source
+#     path only for compiler-rt/compiler-rt-native. The new logs show the same
+#     path expansion hitting libcxx-native before CMake starts.
+#   - v61 removes PR mutation from the libcxx bbappend as well and adds a
+#     libcxx/libcxx-native configure guard that materializes the exact CMake
+#     runtimes path as a symlink to the real shared LLVM source tree. Unlike the
+#     compiler-rt empty-package fallback, libcxx fails early if no real LLVM
+#     runtimes CMake entry point can be found.
 #
 # v59 notes:
 #   - Adds a Thor linux-noble-nvidia-tegra prefetch/repair guard. The Thor
@@ -200,12 +208,12 @@ Supported platforms:
 
 Examples:
 
-  ./build_oe4t_jetson_multi_platform_v60.sh
-  TARGET_PLATFORM=orin-nx ./build_oe4t_jetson_multi_platform_v60.sh
-  TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_platform_v60.sh
-  BUILD_ALL_PLATFORMS=1 ./build_oe4t_jetson_multi_platform_v60.sh
-  ./build_oe4t_jetson_multi_platform_v60.sh --bundle
-  TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_platform_v60.sh --bundle
+  ./build_oe4t_jetson_multi_platform_v62.sh
+  TARGET_PLATFORM=orin-nx ./build_oe4t_jetson_multi_platform_v62.sh
+  TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_platform_v62.sh
+  BUILD_ALL_PLATFORMS=1 ./build_oe4t_jetson_multi_platform_v62.sh
+  ./build_oe4t_jetson_multi_platform_v62.sh --bundle
+  TARGET_PLATFORM=thor ./build_oe4t_jetson_multi_platform_v62.sh --bundle
 
 EOF_HELP
 }
@@ -271,13 +279,13 @@ EOF_CONF
     if [ "$platform" = "thor" ]; then
         cat >> "$file" <<'EOF_THOR_CUDA_CONF'
 
-# BEGIN generated by build_oe4t_jetson_multi_platform_v60.sh thor cuda overlap guard
+# BEGIN generated by build_oe4t_jetson_multi_platform_v62.sh thor cuda overlap guard
 
 # Thor / CUDA 13 native sysroot collision guard.
 SSTATE_ALLOW_OVERLAP_FILES += " /usr/local/cuda-13.0/targets/sbsa-linux/include/fatbinary_section.h"
 SSTATE_ALLOW_OVERLAP_FILES += " /usr/local/cuda-13.0/include/* /usr/local/cuda-13.0/targets/*/include/* /usr/local/cuda-*/include/* /usr/local/cuda-*/targets/*/include/*"
 
-# END generated by build_oe4t_jetson_multi_platform_v60.sh thor cuda overlap guard
+# END generated by build_oe4t_jetson_multi_platform_v62.sh thor cuda overlap guard
 EOF_THOR_CUDA_CONF
     fi
 
@@ -383,8 +391,7 @@ write_opencv_cuda_sysroot_bbappend() {
     local append_path="$1"
     mkdir -p "$(dirname "$append_path")"
     cat > "$append_path" <<'EOF_OPENCV_CUDA'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
-PR:append = ".jetsonbuilder52"
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 
 CUDA_VERSION_SHORT:pn-opencv = "13.0"
 CUDA_NATIVE_ROOT:pn-opencv = "${RECIPE_SYSROOT_NATIVE}/usr/local/cuda-${CUDA_VERSION_SHORT}"
@@ -502,8 +509,7 @@ write_freeimage_pic_bbappend() {
     local append_path="$1"
     mkdir -p "$(dirname "$append_path")"
     cat > "$append_path" <<'EOF_FREEIMAGE_ACTIVE'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
-PR:append = ".jetsonbuilder52"
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 
 jetson_builder_force_freeimage_pic() {
     if [ -f "${S}/Makefile.gnu" ]; then
@@ -572,7 +578,7 @@ ensure_builder_fix_layer() {
         "$fix_layer/recipes-support/jetson-builder-fixes-marker"
 
     cat > "$fix_layer/conf/layer.conf" <<EOF_LAYER
-# Local fixes generated by build_oe4t_jetson_multi_platform_v60.sh.
+# Local fixes generated by build_oe4t_jetson_multi_platform_v62.sh.
 BBPATH .= ":\${LAYERDIR}"
 BBFILES += "\${LAYERDIR}/recipes-*/*/*.bb \${LAYERDIR}/recipes-*/*/*.bbappend"
 BBFILE_COLLECTIONS += "jetson-builder-fixes"
@@ -598,7 +604,7 @@ INSANE_SKIP:${PN}-qcom-qcs6490-radxa-dragon-q6a-compute += "buildpaths"
 EOF_LINUX_FW
 
     cat > "$fix_layer/recipes-support/hwloc/hwloc_%.bbappend" <<'EOF_HWLOC_CUDA_QA_FIX'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 #
 # Fix observed Orin Nano Super hwloc 2.14.0 do_package_qa failure:
 #   libhwloc.so.15.10.3 requires libcudart.so.13, but no providers found in
@@ -609,7 +615,6 @@ EOF_LINUX_FW
 # libcudart.so.13 without a matching package-level runtime dependency provider.
 # Keep the fix cross-platform for Orin Nano Super, Orin NX, and Thor by making
 # hwloc's CUDA/NVML support opt-in rather than autodetected.
-PR:append = ".jetsonbuilder58"
 
 PACKAGECONFIG:remove = "cuda nvml"
 EXTRA_OECONF:append = " --disable-cuda --disable-nvml"
@@ -630,14 +635,13 @@ do_install:append() {
 EOF_HWLOC_CUDA_QA_FIX
 
     cat > "$fix_layer/recipes-connectivity/openssl/openssl_%.bbappend" <<'EOF_OPENSSL_PARALLEL_FIX'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
-PR:append = ".jetsonbuilder52"
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 PARALLEL_MAKE = "-j1"
 PARALLEL_MAKEINST = "-j1"
 EOF_OPENSSL_PARALLEL_FIX
 
     cat > "$fix_layer/recipes-core/util-linux/util-linux_%.bbappend" <<'EOF_UTIL_LINUX_INSTALL_FIX'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 #
 # Fix observed Thor util-linux-native 2.41.3 do_install failure:
 #   ld: cannot find ./.libs/libmount.so: No such file or directory
@@ -647,7 +651,6 @@ EOF_OPENSSL_PARALLEL_FIX
 # publishing libmount while another install target links mountpoint/swapon
 # against ./.libs/libmount.so.  Keep the fix intentionally narrow by
 # serializing util-linux build/install tasks for native and target variants.
-PR:append = ".jetsonbuilder53"
 PARALLEL_MAKE = "-j1"
 PARALLEL_MAKEINST = "-j1"
 
@@ -667,7 +670,7 @@ do_compile:prepend() {
 EOF_UTIL_LINUX_INSTALL_FIX
 
     cat > "$fix_layer/recipes-support/libidn2/libidn2_%.bbappend" <<'EOF_LIBIDN2_UNISTRING_FIX'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 #
 # Fix observed Thor libidn2 2.3.8 do_install failure in the bundled
 # unistring helper directory:
@@ -680,7 +683,6 @@ EOF_UTIL_LINUX_INSTALL_FIX
 # back to the not-yet-created local archive. Keep this scoped to libidn2:
 # serialize it, force an external libunistring prefix, and sanitize generated
 # helper Makefiles so the helper archive does not link against itself.
-PR:append = ".jetsonbuilder52"
 
 DEPENDS:append = " libunistring"
 PARALLEL_MAKE = "-j1"
@@ -721,7 +723,7 @@ do_install:prepend() {
 EOF_LIBIDN2_UNISTRING_FIX
 
     cat > "$fix_layer/recipes-devtools/perl/perl_%.bbappend" <<'EOF_PERL_PARALLEL_FIX'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 #
 # Fix observed perl/perl-native 5.40.2 do_compile failure:
 #   make[2]: Warning: File 'Makefile.PL' has modification time 13 s in the future
@@ -736,7 +738,6 @@ EOF_LIBIDN2_UNISTRING_FIX
 # serialized, normalize timestamps at compile entry as well, and pass GNU make
 # -o Makefile.PL so generated extension makefiles are not rebuilt solely because
 # of host/filesystem timestamp skew.
-PR:append = ".jetsonbuilder54"
 PARALLEL_MAKE = "-j1"
 PARALLEL_MAKEINST = "-j1"
 EXTRA_OEMAKE:append = " -o Makefile.PL"
@@ -761,7 +762,7 @@ do_compile:prepend() {
 EOF_PERL_PARALLEL_FIX
 
     cat > "$fix_layer/recipes-devtools/e2fsprogs/e2fsprogs_%.bbappend" <<'EOF_E2FSPROGS_LIBEXT2FS_FIX'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 #
 # Fix observed Thor e2fsprogs 1.47.3 do_install failure:
 #   ../lib/libext2fs.so: undefined reference to ext2fs_new_inode
@@ -772,7 +773,6 @@ EOF_PERL_PARALLEL_FIX
 # Those symbols are internal lib/ext2fs objects.  The fix is intentionally not
 # an extra -l flag.  Force stale shared-library artifacts out, serialize this
 # recipe narrowly, and fail early if libext2fs.so is incomplete.
-PR:append = ".jetsonbuilder52"
 
 PARALLEL_MAKE = "-j1"
 PARALLEL_MAKEINST = "-j1"
@@ -851,10 +851,126 @@ do_install:prepend() {
 EOF_E2FSPROGS_LIBEXT2FS_FIX
 
     cat > "$fix_layer/recipes-devtools/clang/libcxx_%.bbappend" <<'EOF_LIBCXX_NATIVE_STDCXX'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
-PR:append = ".jetsonbuilder52"
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
+# Do not append PR here. libcxx uses shared llvm-project sources under
+# TMPDIR/work-shared; changing PR for only this consumer can make BitBake expand
+# OECMAKE_SOURCEPATH/S to a PR-suffixed path that the shared source provider did
+# not create.
 DEPENDS:remove:class-native = "gcc-runtime-native"
 LDFLAGS:append:class-native = " -L${RECIPE_SYSROOT_NATIVE}/usr/lib -Wl,-rpath-link,${RECIPE_SYSROOT_NATIVE}/usr/lib"
+
+jetson_builder_libcxx_repair_missing_runtimes_source() {
+    case "${PN}" in
+        libcxx|libcxx-native) ;;
+        *) return 0 ;;
+    esac
+
+    oecmake_sourcepath="${OECMAKE_SOURCEPATH:-}"
+    recipe_s="${S:-}"
+    llvm_project_source_dir="${LLVM_PROJECT_SOURCE_DIR:-}"
+    llvm_project_source="${LLVM_PROJECT_SOURCE:-}"
+    llvm_source_dir="${LLVM_SOURCE_DIR:-}"
+    bitbake_tmpdir="${TMPDIR:-}"
+
+    cmake_runtimes_dir=""
+    cmake_root=""
+    if [ -n "$oecmake_sourcepath" ]; then
+        case "$oecmake_sourcepath" in
+            */runtimes)
+                cmake_runtimes_dir="$oecmake_sourcepath"
+                cmake_root="$(dirname "$oecmake_sourcepath")"
+                ;;
+            *)
+                cmake_root="$oecmake_sourcepath"
+                cmake_runtimes_dir="$oecmake_sourcepath/runtimes"
+                ;;
+        esac
+    fi
+
+    candidate_roots=""
+    for maybe_source in "$oecmake_sourcepath" "$recipe_s" "$llvm_project_source_dir" "$llvm_project_source" "$llvm_source_dir"; do
+        [ -n "$maybe_source" ] || continue
+        case "$maybe_source" in
+            */runtimes) maybe_root="$(dirname "$maybe_source")" ;;
+            *) maybe_root="$maybe_source" ;;
+        esac
+        if [ -d "$maybe_root" ]; then
+            candidate_roots="$candidate_roots$maybe_root
+"
+        else
+            bbnote "jetson-builder v62: candidate LLVM source root from BitBake variable does not exist for ${PN}: $maybe_root"
+        fi
+    done
+
+    if [ -n "$bitbake_tmpdir" ] && [ -d "$bitbake_tmpdir/work-shared" ]; then
+        found_shared_roots="$(find "$bitbake_tmpdir/work-shared" -maxdepth 5 -type d -name 'llvm-project-*.src' -print 2>/dev/null || true)"
+        if [ -n "$found_shared_roots" ]; then
+            candidate_roots="$candidate_roots$found_shared_roots
+"
+        fi
+    else
+        bbnote "jetson-builder v62: TMPDIR/work-shared is not visible for ${PN}: $bitbake_tmpdir/work-shared"
+    fi
+
+    found_root=""
+    for maybe_root in $candidate_roots; do
+        [ -n "$maybe_root" ] || continue
+        [ -d "$maybe_root" ] || continue
+        case "$maybe_root" in
+            *llvm-project-*.src|*/llvm-project-*.src|*/llvm-project*)
+                if [ -f "$maybe_root/runtimes/CMakeLists.txt" ] || [ -f "$maybe_root/llvm/runtimes/CMakeLists.txt" ]; then
+                    if [ -n "$cmake_root" ] && [ "$maybe_root" = "$cmake_root" ]; then
+                        found_root="$maybe_root"
+                        break
+                    fi
+                    if [ -n "$oecmake_sourcepath" ]; then
+                        case "$oecmake_sourcepath" in
+                            "$maybe_root"|"$maybe_root"/*)
+                                found_root="$maybe_root"
+                                break
+                                ;;
+                        esac
+                    fi
+                    [ -n "$found_root" ] || found_root="$maybe_root"
+                fi
+                ;;
+        esac
+    done
+
+    if [ -z "$found_root" ] || [ ! -d "$found_root" ]; then
+        bbfatal "jetson-builder v62: no usable shared llvm-project runtimes source root found for ${PN}; OECMAKE_SOURCEPATH='$oecmake_sourcepath' S='$recipe_s' TMPDIR='$bitbake_tmpdir'"
+    fi
+
+    real_runtimes_dir="$found_root/runtimes"
+    bbnote "jetson-builder v62: selected LLVM source root for ${PN}: $found_root"
+
+    if [ -f "$real_runtimes_dir/CMakeLists.txt" ]; then
+        bbnote "jetson-builder v62: LLVM runtimes source already exists for ${PN}: $real_runtimes_dir"
+    elif [ -f "$found_root/llvm/runtimes/CMakeLists.txt" ]; then
+        rm -rf "$real_runtimes_dir"
+        ln -snf "$found_root/llvm/runtimes" "$real_runtimes_dir"
+        bbnote "jetson-builder v62: linked missing LLVM runtimes source for ${PN}: $real_runtimes_dir -> $found_root/llvm/runtimes"
+    else
+        bbfatal "jetson-builder v62: selected LLVM source root has no runtimes CMake entry point for ${PN}: $found_root"
+    fi
+
+    if [ -n "$cmake_runtimes_dir" ] && [ "$cmake_runtimes_dir" != "$real_runtimes_dir" ]; then
+        if [ -e "$cmake_runtimes_dir" ] || [ -L "$cmake_runtimes_dir" ]; then
+            if [ -f "$cmake_runtimes_dir/CMakeLists.txt" ]; then
+                bbnote "jetson-builder v62: exact CMake runtimes path already exists for ${PN}: $cmake_runtimes_dir"
+                return 0
+            fi
+            rm -rf "$cmake_runtimes_dir"
+        fi
+        mkdir -p "$(dirname "$cmake_runtimes_dir")"
+        ln -snf "$real_runtimes_dir" "$cmake_runtimes_dir"
+        bbnote "jetson-builder v62: linked exact CMake runtimes source path for ${PN}: $cmake_runtimes_dir -> $real_runtimes_dir"
+    fi
+}
+
+do_configure:prepend() {
+    jetson_builder_libcxx_repair_missing_runtimes_source
+}
 
 jetson_builder_stage_libstdcxx_for_libcxx_native() {
     if [ "${PN}" != "libcxx-native" ]; then
@@ -1051,7 +1167,7 @@ do_populate_lic[prefuncs] += "jetson_builder_repair_llvm_component_license_files
 EOF_LIBCXX_NATIVE_STDCXX
 
     cat > "$fix_layer/recipes-devtools/clang/compiler-rt_%.bbappend" <<'EOF_COMPILER_RT_RPROVIDES'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 # Do not append PR here. compiler-rt uses shared llvm-project sources under
 # TMPDIR/work-shared; changing PR for only this consumer can make BitBake expand
 # OECMAKE_SOURCEPATH/S to a PR-suffixed path that the shared source provider did
@@ -1091,24 +1207,24 @@ jetson_builder_compiler_rt_make_empty_runtimes_tree() {
                 ln -snf "$source_root/$runtime" "$target_runtimes_dir/$runtime"
             fi
         done
-        bbnote "jetson-builder v60: created fallback LLVM runtimes entry point for ${PN} at $target_runtimes_dir; individual runtime sources were linked for diagnostics"
+        bbnote "jetson-builder v62: created fallback LLVM runtimes entry point for ${PN} at $target_runtimes_dir; individual runtime sources were linked for diagnostics"
     else
-        bbwarn "jetson-builder v60: compiler-rt source was not found under $source_root; creating empty compiler-rt fallback for ${PN} at $target_runtimes_dir"
+        bbwarn "jetson-builder v62: compiler-rt source was not found under $source_root; creating empty compiler-rt fallback for ${PN} at $target_runtimes_dir"
     fi
 
     cat > "$target_runtimes_dir/CMakeLists.txt" <<'EOF_JETSON_BUILDER_EMPTY_COMPILER_RT_CMAKE'
 cmake_minimum_required(VERSION 3.20)
 project(JetsonBuilderCompilerRTFallback C CXX)
 
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 # This path is used only when the official llvm-project/runtimes CMake tree is
 # absent. Configure an intentionally empty project so BitBake can produce the
 # already declared empty compiler-rt packages instead of failing before CMake
 # configure starts. When a real runtimes tree exists, the shell guard above
 # preserves or links it and this fallback file is not used.
 add_custom_target(compiler_rt_empty ALL
-    COMMAND ${CMAKE_COMMAND} -E echo "jetson-builder v60: empty compiler-rt fallback")
-install(CODE "message(STATUS \"jetson-builder v60: installing empty compiler-rt fallback\")")
+    COMMAND ${CMAKE_COMMAND} -E echo "jetson-builder v62: empty compiler-rt fallback")
+install(CODE "message(STATUS \"jetson-builder v62: installing empty compiler-rt fallback\")")
 EOF_JETSON_BUILDER_EMPTY_COMPILER_RT_CMAKE
 }
 
@@ -1151,7 +1267,7 @@ jetson_builder_compiler_rt_repair_missing_runtimes_source() {
             candidate_roots="$candidate_roots$maybe_root
 "
         else
-            bbnote "jetson-builder v60: candidate LLVM source root from BitBake variable does not exist for ${PN}: $maybe_root"
+            bbnote "jetson-builder v62: candidate LLVM source root from BitBake variable does not exist for ${PN}: $maybe_root"
         fi
     done
 
@@ -1162,7 +1278,7 @@ jetson_builder_compiler_rt_repair_missing_runtimes_source() {
 "
         fi
     else
-        bbnote "jetson-builder v60: TMPDIR/work-shared is not visible for ${PN}: $bitbake_tmpdir/work-shared"
+        bbnote "jetson-builder v62: TMPDIR/work-shared is not visible for ${PN}: $bitbake_tmpdir/work-shared"
     fi
 
     found_root=""
@@ -1189,19 +1305,19 @@ jetson_builder_compiler_rt_repair_missing_runtimes_source() {
     done
 
     if [ -z "$found_root" ] || [ ! -d "$found_root" ]; then
-        bbwarn "jetson-builder v60: no shared llvm-project source root found for ${PN}; OECMAKE_SOURCEPATH='$oecmake_sourcepath' S='$recipe_s' TMPDIR='$bitbake_tmpdir'"
+        bbwarn "jetson-builder v62: no shared llvm-project source root found for ${PN}; OECMAKE_SOURCEPATH='$oecmake_sourcepath' S='$recipe_s' TMPDIR='$bitbake_tmpdir'"
         return 0
     fi
 
     real_runtimes_dir="$found_root/runtimes"
-    bbnote "jetson-builder v60: selected LLVM source root for ${PN}: $found_root"
+    bbnote "jetson-builder v62: selected LLVM source root for ${PN}: $found_root"
 
     if [ -f "$real_runtimes_dir/CMakeLists.txt" ]; then
-        bbnote "jetson-builder v60: LLVM runtimes source already exists for ${PN}: $real_runtimes_dir"
+        bbnote "jetson-builder v62: LLVM runtimes source already exists for ${PN}: $real_runtimes_dir"
     elif [ -f "$found_root/llvm/runtimes/CMakeLists.txt" ]; then
         rm -rf "$real_runtimes_dir"
         ln -snf "$found_root/llvm/runtimes" "$real_runtimes_dir"
-        bbnote "jetson-builder v60: linked missing LLVM runtimes source for ${PN}: $real_runtimes_dir -> $found_root/llvm/runtimes"
+        bbnote "jetson-builder v62: linked missing LLVM runtimes source for ${PN}: $real_runtimes_dir -> $found_root/llvm/runtimes"
     else
         jetson_builder_compiler_rt_make_empty_runtimes_tree "$real_runtimes_dir" "$found_root" "$recipe_s"
     fi
@@ -1209,14 +1325,14 @@ jetson_builder_compiler_rt_repair_missing_runtimes_source() {
     if [ -n "$cmake_runtimes_dir" ] && [ "$cmake_runtimes_dir" != "$real_runtimes_dir" ]; then
         if [ -e "$cmake_runtimes_dir" ] || [ -L "$cmake_runtimes_dir" ]; then
             if [ -f "$cmake_runtimes_dir/CMakeLists.txt" ]; then
-                bbnote "jetson-builder v60: exact CMake runtimes path already exists for ${PN}: $cmake_runtimes_dir"
+                bbnote "jetson-builder v62: exact CMake runtimes path already exists for ${PN}: $cmake_runtimes_dir"
                 return 0
             fi
             rm -rf "$cmake_runtimes_dir"
         fi
         mkdir -p "$(dirname "$cmake_runtimes_dir")"
         ln -snf "$real_runtimes_dir" "$cmake_runtimes_dir"
-        bbnote "jetson-builder v60: linked exact CMake runtimes source path for ${PN}: $cmake_runtimes_dir -> $real_runtimes_dir"
+        bbnote "jetson-builder v62: linked exact CMake runtimes source path for ${PN}: $cmake_runtimes_dir -> $real_runtimes_dir"
     fi
 }
 
@@ -1394,6 +1510,129 @@ do_populate_lic[prefuncs] += "jetson_builder_repair_llvm_component_license_files
 
 EOF_COMPILER_RT_RPROVIDES
 
+    for llvm_runtime_recipe in libcxxabi libunwind; do
+        cat > "$fix_layer/recipes-devtools/clang/${llvm_runtime_recipe}_%.bbappend" <<'EOF_LLVM_RUNTIME_SHARED_SOURCE_GUARD'
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
+# Do not append PR here. LLVM runtime component recipes may use shared
+# llvm-project sources under TMPDIR/work-shared; changing PR for only one
+# consumer can make BitBake expand OECMAKE_SOURCEPATH/S to a PR-suffixed path
+# that the shared source provider did not create.
+
+jetson_builder_llvm_runtime_repair_missing_runtimes_source() {
+    case "${PN}" in
+        libcxxabi|libcxxabi-native|libunwind|libunwind-native) ;;
+        *) return 0 ;;
+    esac
+
+    oecmake_sourcepath="${OECMAKE_SOURCEPATH:-}"
+    recipe_s="${S:-}"
+    llvm_project_source_dir="${LLVM_PROJECT_SOURCE_DIR:-}"
+    llvm_project_source="${LLVM_PROJECT_SOURCE:-}"
+    llvm_source_dir="${LLVM_SOURCE_DIR:-}"
+    bitbake_tmpdir="${TMPDIR:-}"
+
+    cmake_runtimes_dir=""
+    cmake_root=""
+    if [ -n "$oecmake_sourcepath" ]; then
+        case "$oecmake_sourcepath" in
+            */runtimes)
+                cmake_runtimes_dir="$oecmake_sourcepath"
+                cmake_root="$(dirname "$oecmake_sourcepath")"
+                ;;
+            *)
+                cmake_root="$oecmake_sourcepath"
+                cmake_runtimes_dir="$oecmake_sourcepath/runtimes"
+                ;;
+        esac
+    fi
+
+    candidate_roots=""
+    for maybe_source in "$oecmake_sourcepath" "$recipe_s" "$llvm_project_source_dir" "$llvm_project_source" "$llvm_source_dir"; do
+        [ -n "$maybe_source" ] || continue
+        case "$maybe_source" in
+            */runtimes) maybe_root="$(dirname "$maybe_source")" ;;
+            *) maybe_root="$maybe_source" ;;
+        esac
+        if [ -d "$maybe_root" ]; then
+            candidate_roots="$candidate_roots$maybe_root
+"
+        else
+            bbnote "jetson-builder v62: candidate LLVM source root from BitBake variable does not exist for ${PN}: $maybe_root"
+        fi
+    done
+
+    if [ -n "$bitbake_tmpdir" ] && [ -d "$bitbake_tmpdir/work-shared" ]; then
+        found_shared_roots="$(find "$bitbake_tmpdir/work-shared" -maxdepth 5 -type d -name 'llvm-project-*.src' -print 2>/dev/null || true)"
+        if [ -n "$found_shared_roots" ]; then
+            candidate_roots="$candidate_roots$found_shared_roots
+"
+        fi
+    else
+        bbnote "jetson-builder v62: TMPDIR/work-shared is not visible for ${PN}: $bitbake_tmpdir/work-shared"
+    fi
+
+    found_root=""
+    for maybe_root in $candidate_roots; do
+        [ -n "$maybe_root" ] || continue
+        [ -d "$maybe_root" ] || continue
+        case "$maybe_root" in
+            *llvm-project-*.src|*/llvm-project-*.src|*/llvm-project*)
+                if [ -f "$maybe_root/runtimes/CMakeLists.txt" ] || [ -f "$maybe_root/llvm/runtimes/CMakeLists.txt" ]; then
+                    if [ -n "$cmake_root" ] && [ "$maybe_root" = "$cmake_root" ]; then
+                        found_root="$maybe_root"
+                        break
+                    fi
+                    if [ -n "$oecmake_sourcepath" ]; then
+                        case "$oecmake_sourcepath" in
+                            "$maybe_root"|"$maybe_root"/*)
+                                found_root="$maybe_root"
+                                break
+                                ;;
+                        esac
+                    fi
+                    [ -n "$found_root" ] || found_root="$maybe_root"
+                fi
+                ;;
+        esac
+    done
+
+    if [ -z "$found_root" ] || [ ! -d "$found_root" ]; then
+        bbfatal "jetson-builder v62: no usable shared llvm-project runtimes source root found for ${PN}; OECMAKE_SOURCEPATH='$oecmake_sourcepath' S='$recipe_s' TMPDIR='$bitbake_tmpdir'"
+    fi
+
+    real_runtimes_dir="$found_root/runtimes"
+    bbnote "jetson-builder v62: selected LLVM source root for ${PN}: $found_root"
+
+    if [ -f "$real_runtimes_dir/CMakeLists.txt" ]; then
+        bbnote "jetson-builder v62: LLVM runtimes source already exists for ${PN}: $real_runtimes_dir"
+    elif [ -f "$found_root/llvm/runtimes/CMakeLists.txt" ]; then
+        rm -rf "$real_runtimes_dir"
+        ln -snf "$found_root/llvm/runtimes" "$real_runtimes_dir"
+        bbnote "jetson-builder v62: linked missing LLVM runtimes source for ${PN}: $real_runtimes_dir -> $found_root/llvm/runtimes"
+    else
+        bbfatal "jetson-builder v62: selected LLVM source root has no runtimes CMake entry point for ${PN}: $found_root"
+    fi
+
+    if [ -n "$cmake_runtimes_dir" ] && [ "$cmake_runtimes_dir" != "$real_runtimes_dir" ]; then
+        if [ -e "$cmake_runtimes_dir" ] || [ -L "$cmake_runtimes_dir" ]; then
+            if [ -f "$cmake_runtimes_dir/CMakeLists.txt" ]; then
+                bbnote "jetson-builder v62: exact CMake runtimes path already exists for ${PN}: $cmake_runtimes_dir"
+                return 0
+            fi
+            rm -rf "$cmake_runtimes_dir"
+        fi
+        mkdir -p "$(dirname "$cmake_runtimes_dir")"
+        ln -snf "$real_runtimes_dir" "$cmake_runtimes_dir"
+        bbnote "jetson-builder v62: linked exact CMake runtimes source path for ${PN}: $cmake_runtimes_dir -> $real_runtimes_dir"
+    fi
+}
+
+do_configure:prepend() {
+    jetson_builder_llvm_runtime_repair_missing_runtimes_source
+}
+EOF_LLVM_RUNTIME_SHARED_SOURCE_GUARD
+    done
+
     cat > "$fix_layer/recipes-bsp/tegra-binaries/tegra-libraries-%_%.bbappend" <<'EOF_TEGRA_LIBS'
 ERROR_QA:remove = "buildpaths"
 WARN_QA:append = " buildpaths"
@@ -1411,8 +1650,7 @@ EOF_TEGRA_LIBS
     fi
     if [ "$platform" = "thor" ] && [ "$has_cuda_nvcc_recipe" = "1" ]; then
         cat > "$fix_layer/recipes-devtools/cuda/cuda-nvcc_%.bbappend" <<'EOF_CUDA_NVCC'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
-PR:append = ".jetsonbuilder52"
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 jetson_builder_prune_cuda_nvcc_duplicate_header_from_dir() {
     root_base="$1"
     for duplicate in \
@@ -1432,8 +1670,7 @@ jetson_builder_prune_cuda_nvcc_duplicate_header_sysroot() {
 EOF_CUDA_NVCC
 
         cat > "$fix_layer/recipes-devtools/cuda/cuda-compiler_%.bbappend" <<'EOF_CUDA_COMPILER'
-# Generated by build_oe4t_jetson_multi_platform_v60.sh.
-PR:append = ".jetsonbuilder52"
+# Generated by build_oe4t_jetson_multi_platform_v62.sh.
 python jetson_builder_prune_cuda_nvcc_native_component () {
     import glob, os
     tmpdir = d.getVar('TMPDIR') or ''
@@ -1589,7 +1826,6 @@ EOF_MKBOOTIMG_WRAPPER
         cat > "$fix_layer/recipes-bsp/tegra-flashtools/tegra-flashtools-native_%.bbappend" <<'EOF_TEGRA_FLASHTOOLS'
 DEPENDS:append = " qemu-native file-native"
 JETSON_BUILDER_FIXDIR := "${THISDIR}"
-PR:append = ".jetsonbuilder52"
 do_install:append() {
     mkbootimg_path="${D}${bindir}/tegra-flash/mkbootimg"
     real_path="${mkbootimg_path}.real"
@@ -1729,7 +1965,10 @@ clean_libcxx_native_state_if_needed() {
 clean_compiler_rt_runtimes_state_if_needed() {
     local distro_dir="$1" build_abs_dir="$2"
     local fix_layer="$distro_dir/layers/meta-jetson-builder-fixes"
-    clean_recipe_state_if_fix_changed "$build_abs_dir" "compiler-rt-missing-runtimes-clean-v60" "compiler-rt compiler-rt-native" \
+    clean_recipe_state_if_fix_changed "$build_abs_dir" "llvm-missing-runtimes-clean-v62" "libcxx libcxx-native libcxxabi libcxxabi-native libunwind libunwind-native compiler-rt compiler-rt-native" \
+        "$fix_layer/recipes-devtools/clang/libcxx_%.bbappend" \
+        "$fix_layer/recipes-devtools/clang/libcxxabi_%.bbappend" \
+        "$fix_layer/recipes-devtools/clang/libunwind_%.bbappend" \
         "$fix_layer/recipes-devtools/clang/compiler-rt_%.bbappend"
 }
 
@@ -1819,15 +2058,29 @@ validate_perl_parallel_fix() {
 }
 
 validate_compiler_rt_runtimes_fix() {
-    log "Validating compiler-rt v60 missing-runtimes configure guard is visible"
-    if ! bitbake -e compiler-rt-native >/tmp/jetson-builder-compiler-rt-native-env.txt 2>/tmp/jetson-builder-compiler-rt-native-env.err; then
-        warn "compiler-rt-native is not active in BitBake metadata; skipping compiler-rt validation."
-        return 0
-    fi
-    grep -q 'jetson_builder_compiler_rt_repair_missing_runtimes_source' /tmp/jetson-builder-compiler-rt-native-env.txt || die "compiler-rt-native is active, but the v60 missing-runtimes configure guard is not visible in BitBake metadata."
-    grep -q 'JetsonBuilderCompilerRTFallback' /tmp/jetson-builder-compiler-rt-native-env.txt || die "compiler-rt-native is active, but the v60 empty fallback CMake guard is not visible in BitBake metadata."
-}
+    log "Validating LLVM v62 missing-runtimes configure guards are visible"
 
+    local recipe env_file err_file guard
+    for recipe in libcxx-native libcxxabi-native libunwind-native compiler-rt-native; do
+        env_file="/tmp/jetson-builder-${recipe}-env.txt"
+        err_file="/tmp/jetson-builder-${recipe}-env.err"
+        if ! bitbake -e "$recipe" >"$env_file" 2>"$err_file"; then
+            warn "$recipe is not active in BitBake metadata; skipping LLVM runtime guard validation for this recipe."
+            continue
+        fi
+
+        case "$recipe" in
+            compiler-rt-native) guard='jetson_builder_compiler_rt_repair_missing_runtimes_source' ;;
+            libcxx-native) guard='jetson_builder_libcxx_repair_missing_runtimes_source' ;;
+            *) guard='jetson_builder_llvm_runtime_repair_missing_runtimes_source' ;;
+        esac
+
+        grep -q "$guard" "$env_file" || die "$recipe is active, but the v62 missing-runtimes configure guard is not visible in BitBake metadata."
+        if [ "$recipe" = "compiler-rt-native" ]; then
+            grep -q 'JetsonBuilderCompilerRTFallback' "$env_file" || die "compiler-rt-native is active, but the v62 empty fallback CMake guard is not visible in BitBake metadata."
+        fi
+    done
+}
 clean_thor_cuda_native_state_if_needed() {
     local platform="$1" build_abs_dir="$2" fix_layer="$3" local_conf="${4:-}"
     [ "$platform" = "thor" ] || return 0
